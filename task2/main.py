@@ -3,6 +3,7 @@ import numpy as np
 from scipy.linalg import solve
 
 
+# Функция для парсинга входного файла, который содержит описание элементов схемы
 def parse_input_file(file_path):
     elements = []
     with open(file_path, 'r') as file:
@@ -11,14 +12,18 @@ def parse_input_file(file_path):
     return elements
 
 
+# Функция для построения матрицы проводимостей (G) и вектора токов (I) по методу узловых потенциалов
 def build_mna_matrix(elements):
-    nodes = set()
-    resistors = []
-    voltage_sources = []
+    nodes = set()  # Множество для хранения всех узлов
+    resistors = []  # Список для хранения резисторов
+    voltage_sources = []  # Список для хранения источников напряжения
 
+    # Регулярное выражение для парсинга строк с резисторами
     resistor_pattern = re.compile(r'^R:(\w+)\s+(\w+)\s+(\w+)\s+R=(\d+\.?\d*)$')
+    # Регулярное выражение для парсинга строк с источниками напряжения
     voltage_source_pattern = re.compile(r'^Vsrc:(\w+)\s+(\w+)\s+(\w+)\s+[UV]=(\d+\.?\d*)$')
 
+    # Парсинг элементов схемы
     for element in elements:
         resistor_match = resistor_pattern.match(element)
         voltage_source_match = voltage_source_pattern.match(element)
@@ -36,16 +41,20 @@ def build_mna_matrix(elements):
         else:
             raise ValueError(f"Неверный формат строки: {element}")
 
+    # Исключаем узел 'gnd' (земля) из множества узлов
     nodes.discard('gnd')
     node_list = list(nodes)
+    # Создаем индекс для каждого узла
     node_index = {node: i for i, node in enumerate(node_list)}
 
     num_nodes = len(node_list)
-    num_voltage_sources = len(voltage_sources)
+    num_volt_sources = len(voltage_sources)
 
-    G = np.zeros((num_nodes, num_nodes))
-    I = np.zeros(num_nodes)
+    # Инициализация матрицы проводимостей (G) и вектора токов (I)
+    G = np.zeros((num_nodes + num_volt_sources, num_nodes + num_volt_sources))
+    I = np.zeros(num_nodes + num_volt_sources)
 
+    # Заполнение матрицы проводимостей для резисторов
     for (node1, node2, resistance) in resistors:
         if node1 != 'gnd' and node2 != 'gnd':
             n1, n2 = node_index[node1], node_index[node2]
@@ -60,58 +69,63 @@ def build_mna_matrix(elements):
             n1 = node_index[node1]
             G[n1][n1] += 1 / resistance
 
-    for (node1, node2, voltage) in voltage_sources:
+    # Заполнение матрицы проводимостей и вектора токов для источников напряжения
+    for idx, (node1, node2, voltage) in enumerate(voltage_sources):
         if node1 == 'gnd':
             n2 = node_index[node2]
-            I[n2] -= voltage
+            voltage_index = num_nodes + idx
+            G[voltage_index][n2] = -1
+            G[n2][voltage_index] = -1
+            I[voltage_index] = -voltage
         elif node2 == 'gnd':
             n1 = node_index[node1]
-            I[n1] += voltage
+            voltage_index = num_nodes + idx
+            G[voltage_index][n1] = 1
+            G[n1][voltage_index] = 1
+            I[voltage_index] = voltage
         else:
             n1, n2 = node_index[node1], node_index[node2]
-            G = np.pad(G, ((0, 1), (0, 1)), mode='constant')
-            I = np.pad(I, (0, 1), mode='constant')
-            G[n1][-1] = 1
-            G[-1][n1] = 1
-            G[n2][-1] = -1
-            G[-1][n2] = -1
-            I[-1] = voltage
-
-    # Удаление последней строки и столбца, если они добавлены для источников напряжения
-    G = G[:num_nodes, :num_nodes]
-    I = I[:num_nodes]
+            voltage_index = num_nodes + idx
+            G[voltage_index][n1] = -1
+            G[voltage_index][n2] = 1
+            G[n1][voltage_index] = -1
+            G[n2][voltage_index] = 1
+            I[voltage_index] = voltage
 
     return G, I, node_index
 
 
-def solve_mna(G, I):
-    V = solve(G, I)
-    return V
 
-
+# Функция для записи результатов в выходной файл
 def write_output_file(file_path, node_voltages):
     with open(file_path, 'w') as file:
         for node, voltage in node_voltages.items():
             file.write(f"{node} {voltage}\n")
 
 
+# Главная функция
 def main():
     input_file = 'input_example.txt'
     output_file = 'output_example.txt'
-
+    # Парсинг входного файла
     elements = parse_input_file(input_file)
+    # Построение матрицы проводимостей и вектора токов
     G, I, node_index = build_mna_matrix(elements)
 
-    # Проверка матрицы G и вектора I перед решением
+    # Вывод матрицы проводимостей и вектора токов для отладки
     print("Матрица G:")
     print(G)
     print("Вектор I:")
     print(I)
 
-    V = solve_mna(G, I)
+    # Решение системы уравнений
+    V = solve(G, I)
 
+    # Создание словаря узловых напряжений
     node_voltages = {node: V[index] for node, index in node_index.items()}
+    # Запись результатов в выходной файл
     write_output_file(output_file, node_voltages)
+    print("Напряжения на узлах:", node_voltages)
 
 
 if __name__ == "__main__":
